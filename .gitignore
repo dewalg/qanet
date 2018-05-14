@@ -1,0 +1,11 @@
+log/*
+data/*
+tmp/*
+test.py
+**/.ipynb_checkpoints
+.DS_Store
+*.ipynb
+.idea/
+*.py[cod]
+*$py.class
+__pycache__/
