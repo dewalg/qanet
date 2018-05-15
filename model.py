@@ -25,6 +25,7 @@ class QANet:
         self.num_out_blocks = 7
 
         self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
+        self.dropout = 0.1
 
     def embed(self, word, char, isContext=False):
         """
@@ -60,6 +61,18 @@ class QANet:
 
             emb_word = tf.nn.embedding_lookup(self.word_emb, word)
             emb = tf.concat([emb_word, emb_char], axis=2)
+
+            # 2 layer highway network
+            with tf.variable_scope("highway", reuse=tf.AUTO_REUSE):
+                # initially project the vector to the same space
+                emb = tf.layers.dense(emb, self.hid_dim, use_bias=False, name="init_proj")
+                for i in range(2):
+                    T = tf.layers.dense(emb, self.hid_dim, activation=tf.sigmoid,
+                                        use_bias=True, name="gate_%d" % i)
+                    H = tf.layers.dense(emb, self.hid_dim, activation=tf.nn.relu,
+                                        use_bias=True, name="affine_%d" % i)
+                    H = tf.nn.dropout(H, 1.0 - self.dropout)
+                    emb = T*H + emb * (1.0 - T)
 
             return emb
 
