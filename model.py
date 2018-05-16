@@ -21,18 +21,25 @@ class QANet:
         self.ques_lim = self.config['dim'].getint('ques_limit')
         self.char_lim = self.config['dim'].getint('char_limit')
         self.hid_dim  = self.config['dim'].getint('hidden_layer_size')
+        self.enc_dim  = self.config['dim'].getint('encode_dim')
         self.char_dim = self.config['dim'].getint('char_dim')
         self.N        = self.config['dim'].getint('batch_size')
 
         # hyper params - TODO: put into a config file
-        self.num_embed_blocks = 3
-        self.num_out_blocks = 7
+        self.emb_num_filters = self.enc_dim
+        self.emb_kernel_size = 7
+        self.emb_num_blocks = 1
+        self.emb_num_conv_layers = 4
 
         self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
         self.dropout = 0.1
 
         # encoder blocks
-        self.emb_encoder = EncoderBlk(1, 4, 7, 128, self.is_training)
+        self.emb_encoder = EncoderBlk(self.emb_num_blocks,
+                                      self.emb_num_conv_layers,
+                                      self.emb_kernel_size,
+                                      self.enc_dim,
+                                      self.is_training)
 
     def embed(self, word, char, is_context=False):
         """
@@ -46,55 +53,117 @@ class QANet:
         """
         # TODO: add dropout on the embeddings
         emb_dim = self.con_lim if is_context else self.ques_lim
-        with tf.variable_scope("embedding", reuse=tf.AUTO_REUSE):
-            emb_char = tf.nn.embedding_lookup(self.char_emb, char)
-            emb_char = tf.reshape(emb_char, [self.N*emb_dim, self.char_lim, self.char_dim])
+        emb_char = tf.nn.embedding_lookup(self.char_emb, char)
+        emb_char = tf.reshape(emb_char, [self.N*emb_dim, self.char_lim, self.char_dim])
 
-            # as per Seo et al., we do a 1 layer, 1D convolution
-            # and then find the max per row, and use that 1D vector
-            # as the character embedding
-            # use kernel size of 5
-            kernel = tf.get_variable("emb_kernel", [5, self.char_dim, self.hid_dim],
-                                     dtype=tf.float32, regularizer=self.l2_regularizer)
+        # as per Seo et al., we do a 1 layer, 1D convolution
+        # and then find the max per row, and use that 1D vector
+        # as the character embedding
+        # use kernel size of 5
+        kernel = tf.get_variable("emb_kernel", [5, self.char_dim, self.hid_dim],
+                                 dtype=tf.float32, regularizer=self.l2_regularizer)
 
-            bias = tf.get_variable("emb_bias", [1, 1, self.hid_dim],
-                                   regularizer=self.l2_regularizer,
-                                   initializer=tf.zeros_initializer())
+        bias = tf.get_variable("emb_bias", [1, 1, self.hid_dim],
+                               regularizer=self.l2_regularizer,
+                               initializer=tf.zeros_initializer())
 
-            outputs = tf.nn.conv1d(emb_char, kernel, 1, "VALID") + bias
-            outputs = tf.nn.relu(outputs)
-            emb_char = tf.reduce_max(outputs, axis=1)
-            emb_char = tf.reshape(emb_char, [self.N, emb_dim, emb_char.shape[-1]])
+        outputs = tf.nn.conv1d(emb_char, kernel, 1, "VALID") + bias
+        outputs = tf.nn.relu(outputs)
+        emb_char = tf.reduce_max(outputs, axis=1)
+        emb_char = tf.reshape(emb_char, [self.N, emb_dim, emb_char.shape[-1]])
 
-            emb_word = tf.nn.embedding_lookup(self.word_emb, word)
-            # emb_word = tf.reshape(emb_word, [self.N, emb_word.shape[1], emb_word.shape[2]])
-            emb = tf.concat([emb_word, emb_char], axis=2)
+        emb_word = tf.nn.embedding_lookup(self.word_emb, word)
+        # emb_word = tf.reshape(emb_word, [self.N, emb_word.shape[1], emb_word.shape[2]])
+        emb = tf.concat([emb_word, emb_char], axis=2)
 
-            # 2 layer highway network
-            with tf.variable_scope("highway", reuse=tf.AUTO_REUSE):
-                # initially project the vector to the same space
-                emb = tf.layers.dense(emb, self.hid_dim, use_bias=False, name="init_proj")
-                for i in range(2):
-                    T = tf.layers.dense(emb, self.hid_dim, activation=tf.sigmoid,
-                                        use_bias=True, name="gate_%d" % i)
-                    H = tf.layers.dense(emb, self.hid_dim, activation=tf.nn.relu,
-                                        use_bias=True, name="affine_%d" % i)
-                    H = tf.nn.dropout(H, 1.0 - self.dropout)
-                    emb = T*H + emb * (1.0 - T)
+        # 2 layer highway network
+        with tf.variable_scope("highway", reuse=tf.AUTO_REUSE):
+            # initially project the vector to the same space
+            emb = tf.layers.dense(emb, self.hid_dim, use_bias=False, name="init_proj")
+            for i in range(2):
+                T = tf.layers.dense(emb, self.hid_dim, activation=tf.sigmoid,
+                                    use_bias=True, name="gate_%d" % i)
+                H = tf.layers.dense(emb, self.hid_dim, activation=tf.nn.relu,
+                                    use_bias=True, name="affine_%d" % i)
+                H = tf.nn.dropout(H, 1.0 - self.dropout)
+                emb = T*H + emb * (1.0 - T)
 
             return emb
 
+    def context_query_att(self, c, q):
+        """
+        computes the context-query attention using the trilinear
+        function as described in the qa-net paper. 
+        we use different lambda functions to map each 
+        question row to each context row, to calculate the similarity.
+        *Note we take extra care for the batch dimension
+        :param c: the context embedding, a tensor [batch x cLen x D] 
+        :param q: the question embedding, a tensor [batch x qLen x D] 
+        :return: the similarity matrix, a tensor [batch x cLen x 4*D] 
+        """
+        W = tf.get_variable("Sim_W_0", [3*self.enc_dim, 1])
+        def lambda_map_2(c_row, q_row):
+            # 'c' is a tensor looking like [D,]
+            # 'q' is a tensor looking like [D,]
+            c_row = tf.reshape(c_row, [1, self.enc_dim])
+            q_row = tf.reshape(q_row, [1, self.enc_dim])
+            cq_mul = tf.multiply(c_row, q_row)
+            cqcq = tf.concat([c_row, q_row, cq_mul], axis=1)
+            return tf.reshape(tf.matmul(cqcq, W), [])
+
+        def lambda_map_1(c_row, q_single):
+            # 'c' is a tensor looking like [D]
+            # 'q' is a tensor looking like [qLen x D]
+            return tf.map_fn(lambda q_row: lambda_map_2(c_row, q_row), q_single, dtype=tf.float32)
+
+        def lambda_map(c_single, q_single):
+            # 'c' is a tensor looking like [cLen x D]
+            # 'q' is a tensor looking like [qLen x D]
+            return tf.map_fn(lambda c_row: lambda_map_1(c_row, q_single), c_single, dtype=tf.float32)
+
+        # compute S for each batch
+        l = []
+        for b in range(self.N):
+            out = lambda_map(c[b], q[b])
+            l.append(out)
+
+        # S should be a matrix of dim [batch x qLen x cLen]
+        S = tf.stack(l)
+
+        # do a row-wise softmax
+        S_ = tf.nn.softmax(S, axis=1)
+        l = []
+        for b in range(self.N):
+            out = tf.matmul(S_[b], q[b])
+            l.append(out)
+        A = tf.stack(l)
+
+        # do a row-wise softmax
+        S__ = tf.nn.softmax(S_, axis=2)
+        l = []
+        for b in range(self.N):
+            out = tf.matmul(S__[b], S_[b], transpose_b=True)
+            out = tf.matmul(out, c[b])
+            l.append(out)
+        B = tf.stack(l)
+
+        # concatenate the results and return for the next layer
+        return tf.concat([c, A, c*A, c*B], axis=2)
+
     def forward(self, context, ques, context_char, ques_char):
         # get word and character embeddings
-        c_emb = self.embed(context, context_char, is_context=True)
-        q_emb = self.embed(ques, ques_char)
+        with tf.variable_scope("embedding", reuse=tf.AUTO_REUSE):
+            c_emb = self.embed(context, context_char, is_context=True)
+            q_emb = self.embed(ques, ques_char)
 
         # encode the embeddings
-        with tf.variable_scope("embedding", reuse=tf.AUTO_REUSE):
+        with tf.variable_scope("encoding", reuse=tf.AUTO_REUSE):
             c = self.emb_encoder.forward(c_emb)
             q = self.emb_encoder.forward(q_emb)
 
-        att = self.self_attention(c, q)
+        # apply the context-query attention similar to BiDAF model
+        with tf.variable_scope("attention", reuse=tf.AUTO_REUSE):
+            att = self.context_query_att(c, q)
 
         blk1_out = att
         for _ in range(7):
