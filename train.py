@@ -1,5 +1,6 @@
-from util import *
+import os
 import json
+from util import *
 from model import *
 
 config = ConfigParser(interpolation=ExtendedInterpolation())
@@ -12,6 +13,13 @@ hidlim = config['dim'].getint('hidden_layer_size')
 encdim = config['dim'].getint('encode_dim')
 chardim = config['dim'].getint('char_dim')
 num_gpus = config['hp'].getint('NUM_GPUS')
+save_dir = config['paths']['TMPDIR']
+log_dir = config['paths']['LOGDIR']
+
+MAX_EPOCH = config['hp'].getint('MAX_EPOCH')
+DISPLAY_ITER = config['iter'].getint('DISPLAY_ITER')
+SAVE_ITER = config['iter'].getint('SAVE_ITER')
+VAL_ITER = config['iter'].getint('VAL_ITER')
 
 def average_gradients(tower_grads):
     average_grads = []
@@ -35,6 +43,12 @@ with open(config['paths']['word_emb']) as f:
 
 with open(config['paths']['char_emb']) as f:
     char_emb = np.array(json.load(f), dtype=np.float32)
+
+with open(config.dev_eval_file, "r") as fh:
+    dev_eval_f = json.load(fh)
+
+with open(config.dev_meta, "r") as fh:
+    meta = json.load(fh)
 
 word_mat = tf.constant(word_emb, dtype=tf.float32)
 char_mat = tf.constant(char_emb, dtype=tf.float32)
@@ -71,10 +85,13 @@ for i in range(num_gpus):
                                                   lambda: val_it.get_next())
 
             # forward inference
-            p1, p2 = model.forward(c, q, ch, qh)
+            p1_logits, p2_logits = model.forward(c, q, ch, qh)
+            p1 = tf.argmax(p1_logits, axis=1)
+            p2 = tf.argmax(p1_logits, axis=2)
+
 
             # get the loss
-            loss = model.get_loss(p1, p2, y1, y2)
+            loss = model.get_loss(p1_logits, p2_logits, y1, y2)
             tower_losses.append(loss)
 
             ## reuse variables for next call
@@ -87,11 +104,81 @@ avg_loss = tf.reduce_mean(tower_losses)
 grads = average_gradients(tower_grads)
 train_op = opt.apply_gradients(grads)
 
+
+# saver
+saver = tf.train.Saver(max_to_keep=3)
+if not os.path.exists(save_dir):
+    os.mkdir(save_dir)
+
+ckpt_path = os.path.join(save_dir, 'ckpt')
+if not os.path.exists(ckpt_path):
+    os.mkdir(ckpt_path)
+
 with tf.Session() as sess:
-    sess.run([train_init_op, val_init_op])
+    # initialize the graph
     sess.run(tf.global_variables_initializer())
-    while True:
-        try:
-            _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
-        except tf.errors.OutOfRangeError:
-            break
+
+    summary_writer = tf.summary.FileWriter(log_dir, sess.graph)
+    tf.logging.set_verbosity(tf.logging.INFO)
+
+    ckpt = tf.train.get_checkpoint_state(ckpt_path)
+    if ckpt and ckpt.model_checkpoint_path:
+        tf.logging.info('Restoring from: %s', ckpt.model_checkpoint_path)
+        saver.restore(sess, ckpt.all_model_checkpoint_paths[-1])
+    else:
+        tf.logging.info('No checkpoint file found.')
+
+    it = 1
+    for epoch in range(MAX_EPOCH):
+        sess.run([train_init_op, val_init_op])
+        while True:
+            try:
+                _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
+
+                if it % DISPLAY_ITER == 0:
+                    tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
+                    loss_summ = tf.Summary(value=[
+                        tf.Summary.Value(tag="train_loss", simple_value=loss)
+                    ])
+                    summary_writer.add_summary(loss_summ, it)
+
+                if it % SAVE_ITER == 0 and it > 0:
+                    saver.save(sess, os.path.join(ckpt_path, 'model_ckpt'), it)
+
+                if it % VAL_ITER == 0 and it > 0:
+                    sess.run(val_init_op)
+                    tf.logging.info('validating...')
+                    answer_dict = {}
+                    losses = []
+                    while True:
+                        try:
+                            qa_id, loss, yp1, yp2 = sess.run([qa_id, avg_loss, p1, p2], feed_dict={is_training: False})
+
+                            answer_dict_, _ = convert_tokens(
+                                dev_eval_f, qa_id.tolist(), yp1.tolist(), yp2.tolist())
+                            answer_dict.update(answer_dict_)
+                            losses.append(loss)
+                        except tf.errors.OutOfRangeError as e:
+                            break
+
+                    loss = np.mean(losses)
+                    metrics = evaluate(dev_eval_f, answer_dict)
+                    metrics["loss"] = loss
+                    loss_sum = tf.Summary(value=[tf.Summary.Value(
+                        tag="val/loss", simple_value=metrics["loss"]), ])
+                    f1_sum = tf.Summary(value=[tf.Summary.Value(
+                        tag="val/f1", simple_value=metrics["f1"]), ])
+                    em_sum = tf.Summary(value=[tf.Summary.Value(
+                        tag="val/em", simple_value=metrics["exact_match"]), ])
+
+                    tf.logging.info('val f1: %f', metrics['f1'])
+
+                    # add val metrics to summary
+                    to_write = [loss_sum, f1_sum, em_sum]
+                    for metric in to_write:
+                        summary_writer.add_summary(metric, it)
+
+            except tf.errors.OutOfRangeError:
+                break
+
+            it += 1
