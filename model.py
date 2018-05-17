@@ -17,8 +17,8 @@ class QANet:
         self.config.read('config.ini')
 
         # dimensions and limits for the model
-        self.con_lim  = self.config['dim'].getint('para_limit')
-        self.ques_lim = self.config['dim'].getint('ques_limit')
+        self.con_lim  = self.config['dim'].getint('para_limit') # if is_training else self.config['dim'].getint('test_para_limit')
+        self.ques_lim = self.config['dim'].getint('ques_limit') # if is_training else self.config['dim'].getint('test_ques_limit')
         self.char_lim = self.config['dim'].getint('char_limit')
         self.hid_dim  = self.config['dim'].getint('hidden_layer_size')
         self.enc_dim  = self.config['dim'].getint('encode_dim')
@@ -174,7 +174,14 @@ class QANet:
         W = tf.get_variable("W", [self.N, self.enc_dim * 2, 1])
         inp = tf.concat([model_out_0, model_out_1], axis=2)
         inp = tf.squeeze(tf.matmul(inp, W))
-        logits = tf.nn.softmax(inp, axis=0)
+
+        # scale the tensor so softmax doesn't blow up
+        inp = tf.div(
+            tf.subtract(inp, tf.reduce_min(inp)),
+            tf.subtract(tf.reduce_max(inp), tf.reduce_min(inp))
+        )
+
+        logits = tf.nn.softmax(inp)
         p = tf.argmax(logits, axis=1)
         return logits, p
 
@@ -207,14 +214,10 @@ class QANet:
         return p1_logits, p2_logits
 
     def get_loss(self, p_logits_1, p_logits_2, actual_1, actual_2):
-        p1 = p_logits_1*actual_1
-        p1 = tf.Print(p1, [tf.reduce_sum(p1, [0,1])])
-        p1 = tf.reduce_sum(p1, axis=1)
+        p1 = tf.reduce_sum(p_logits_1*actual_1, axis=1)
         p2 = tf.reduce_sum(p_logits_2*actual_2, axis=1)
-        p1 = tf.Print(p1, [p1])
         p1 = tf.reduce_sum(tf.log(p1))
         p2 = tf.reduce_sum(tf.log(p2))
-        p1 = tf.Print(p1, [p1])
         return -1 * (p1+p2) / self.N
 
 

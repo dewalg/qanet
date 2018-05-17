@@ -14,8 +14,10 @@ https://github.com/HKUST-KnowComp/R-Net
 
 def get_record_parser(is_test=False):
     def parse(example):
-        para_limit = config['dim'].getint('test_para_limit') if is_test else config['dim'].getint('para_limit')
-        ques_limit = config['dim'].getint('test_ques_limit') if is_test else config['dim'].getint('ques_limit')
+        # para_limit = config['dim'].getint('test_para_limit') if is_test else config['dim'].getint('para_limit')
+        para_limit = config['dim'].getint('para_limit')
+        # ques_limit = config['dim'].getint('test_ques_limit') if is_test else config['dim'].getint('ques_limit')
+        ques_limit = config['dim'].getint('ques_limit')
         char_limit = config['dim'].getint('char_limit')
         features = tf.parse_single_example(example,
                                            features={
@@ -47,7 +49,7 @@ def get_record_parser(is_test=False):
 def get_batch_dataset(record_file, parser):
     num_threads = tf.constant(config['dim'].getint('num_threads'), dtype=tf.int32)
     dataset = tf.data.TFRecordDataset(record_file).map(
-        parser, num_parallel_calls=num_threads).shuffle(config['dim'].getint('batch_capacity')).repeat()
+        parser, num_parallel_calls=num_threads).shuffle(config['dim'].getint('shuffle_size')).repeat()
     dataset = dataset.batch(config['dim'].getint('batch_size'))
     return dataset
 
