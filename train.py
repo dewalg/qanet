@@ -67,8 +67,8 @@ for i in range(num_gpus):
         with tf.name_scope('gpu_%d' % i):
             tf.layers.set_name_reuse(True)
             c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
-                                      lambda: train_it.get_next(),
-                                      lambda: val_it.get_next())
+                                                  lambda: train_it.get_next(),
+                                                  lambda: val_it.get_next())
 
             # forward inference
             p1, p2 = model.forward(c, q, ch, qh)
@@ -92,6 +92,6 @@ with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     while True:
         try:
-            _, loss = sess.run([train_op, avg_loss])
+            _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
         except tf.errors.OutOfRangeError:
             break
