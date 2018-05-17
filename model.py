@@ -26,10 +26,12 @@ class QANet:
         self.N        = self.config['dim'].getint('batch_size')
 
         # hyper params - TODO: put into a config file
-        self.emb_num_filters = self.enc_dim
         self.emb_kernel_size = 7
         self.emb_num_blocks = 1
         self.emb_num_conv_layers = 4
+
+        self.model_num_blocks = 7
+        self.model_num_conv_layers = 2
 
         self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
         self.dropout = 0.1
@@ -37,6 +39,24 @@ class QANet:
         # encoder blocks
         self.emb_encoder = EncoderBlk(self.emb_num_blocks,
                                       self.emb_num_conv_layers,
+                                      self.emb_kernel_size,
+                                      self.enc_dim,
+                                      self.is_training)
+
+        self.model_blk_1 = EncoderBlk(self.model_num_blocks,
+                                      self.model_num_conv_layers,
+                                      self.emb_kernel_size,
+                                      self.enc_dim,
+                                      self.is_training)
+
+        self.model_blk_2 = EncoderBlk(self.model_num_blocks,
+                                      self.model_num_conv_layers,
+                                      self.emb_kernel_size,
+                                      self.enc_dim,
+                                      self.is_training)
+
+        self.model_blk_3 = EncoderBlk(self.model_num_blocks,
+                                      self.model_num_conv_layers,
                                       self.emb_kernel_size,
                                       self.enc_dim,
                                       self.is_training)
@@ -150,6 +170,14 @@ class QANet:
         # concatenate the results and return for the next layer
         return tf.concat([c, A, c*A, c*B], axis=2)
 
+    def out(self, model_out_0, model_out_1):
+        W = tf.get_variable("W", [self.N, self.enc_dim * 2, 1])
+        inp = tf.concat([model_out_0, model_out_1], axis=2)
+        inp = tf.squeeze(tf.matmul(inp, W))
+        logits = tf.nn.softmax(inp, axis=0)
+        p = tf.argmax(logits, axis=1)
+        return logits, p
+
     def forward(self, context, ques, context_char, ques_char):
         # get word and character embeddings
         with tf.variable_scope("embedding", reuse=tf.AUTO_REUSE):
@@ -165,22 +193,29 @@ class QANet:
         with tf.variable_scope("attention", reuse=tf.AUTO_REUSE):
             att = self.context_query_att(c, q)
 
-        blk1_out = att
-        for _ in range(7):
-            blk1_out = self.model_block_0(blk1_out)
+        with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
+            model_0 = self.model_blk_1.forward(att)
+            model_1 = self.model_blk_2.forward(model_0)
+            model_2 = self.model_blk_3.forward(model_1)
 
-        blk2_out = blk1_out
-        for _ in range(7):
-            blk2_out = self.model_block_0(blk2_out)
+        with tf.variable_scope("out_p1"):
+            p1_logits, p1 = self.out(model_0, model_1)
 
-        blk3_out = blk2_out
-        for _ in range(7):
-            blk3_out = self.model_block_0(blk3_out)
+        with tf.variable_scope("out_p2"):
+            p2_logits, p2 = self.out(model_0, model_2)
 
-        p_start, p_end = self.out(blk1_out, blk2_out, blk3_out)
+        return p1_logits, p2_logits
 
-    def get_loss(self, pred_1, pred_2, actual_1, actual_2):
-        pass
+    def get_loss(self, p_logits_1, p_logits_2, actual_1, actual_2):
+        p1 = p_logits_1*actual_1
+        p1 = tf.Print(p1, [tf.reduce_sum(p1, [0,1])])
+        p1 = tf.reduce_sum(p1, axis=1)
+        p2 = tf.reduce_sum(p_logits_2*actual_2, axis=1)
+        p1 = tf.Print(p1, [p1])
+        p1 = tf.reduce_sum(tf.log(p1))
+        p2 = tf.reduce_sum(tf.log(p2))
+        p1 = tf.Print(p1, [p1])
+        return -1 * (p1+p2) / self.N
 
 
 class EncoderBlk:
@@ -261,7 +296,7 @@ class EncoderBlk:
         :param inputs: Tensor to be projected of shape L by d 
         :return: a Tensor of shape L by num_filters 
         """
-        dim = inputs.get_shape().as_list()[1]
+        dim = inputs.get_shape().as_list()[2]
         if dim == self.dim:
             return inputs
 
@@ -284,7 +319,11 @@ class EncoderBlk:
         return inputs+out
 
     def forward(self, inputs):
+        # print("before")
+        # print(inputs)
         inputs = self.project(inputs)
+        # print("after")
+        # print(inputs)
         for _ in range(self.num_blks):
             out = self.pos_enc(inputs)
             out = self.convolve(out)
