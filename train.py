@@ -44,10 +44,10 @@ with open(config['paths']['word_emb']) as f:
 with open(config['paths']['char_emb']) as f:
     char_emb = np.array(json.load(f), dtype=np.float32)
 
-with open(config.dev_eval_file, "r") as fh:
+with open(config['paths']['dev_eval'], "r") as fh:
     dev_eval_f = json.load(fh)
 
-with open(config.dev_meta, "r") as fh:
+with open(config['paths']['dev_meta'], "r") as fh:
     meta = json.load(fh)
 
 word_mat = tf.constant(word_emb, dtype=tf.float32)
@@ -74,12 +74,13 @@ is_training = tf.placeholder(tf.bool)
 opt = tf.train.AdamOptimizer(learning_rate=config['hp'].getfloat('LR'),
                              beta1=0.8, beta2=0.999, epsilon=1e-07,
                              use_locking=False)
+# opt = tf.train.GradientDescentOptimizer(0.01)
 tower_grads = []
 tower_losses = []
 for i in range(num_gpus):
     with tf.device('/gpu:%d' % i):
-        with tf.name_scope('gpu_%d' % i):
-            tf.layers.set_name_reuse(True)
+    # with tf.device('/cpu:%d' % i):
+        with tf.variable_scope('gpu_%d' % i, reuse=tf.AUTO_REUSE):
             c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
                                                   lambda: train_it.get_next(),
                                                   lambda: val_it.get_next())
@@ -87,17 +88,19 @@ for i in range(num_gpus):
             # forward inference
             p1_logits, p2_logits = model.forward(c, q, ch, qh)
             p1 = tf.argmax(p1_logits, axis=1)
-            p2 = tf.argmax(p1_logits, axis=2)
+            p2 = tf.argmax(p2_logits, axis=1)
 
 
             # get the loss
             loss = model.get_loss(p1_logits, p2_logits, y1, y2)
             tower_losses.append(loss)
 
+            # loss = tf.Print(loss, [loss], "loss = ")
             ## reuse variables for next call
-            tf.get_variable_scope().reuse_variables()
+            # tf.get_variable_scope().reuse_variables()
 
             grads = opt.compute_gradients(loss)
+            # grads = tf.Print(grads, [grads])
             tower_grads.append(grads)
 
 avg_loss = tf.reduce_mean(tower_losses)
@@ -128,12 +131,15 @@ with tf.Session() as sess:
     else:
         tf.logging.info('No checkpoint file found.')
 
-    it = 1
+    it = 0
     for epoch in range(MAX_EPOCH):
         sess.run([train_init_op, val_init_op])
         while True:
             try:
                 _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
+                # loss = sess.run([avg_loss], feed_dict={is_training: True})
+                # print(loss)
+                # break
 
                 if it % DISPLAY_ITER == 0:
                     tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
@@ -152,10 +158,10 @@ with tf.Session() as sess:
                     losses = []
                     while True:
                         try:
-                            qa_id, loss, yp1, yp2 = sess.run([qa_id, avg_loss, p1, p2], feed_dict={is_training: False})
+                            _id, loss, yp1, yp2 = sess.run([qa_id, avg_loss, p1, p2], feed_dict={is_training: False})
 
                             answer_dict_, _ = convert_tokens(
-                                dev_eval_f, qa_id.tolist(), yp1.tolist(), yp2.tolist())
+                                dev_eval_f, _id.tolist(), yp1.tolist(), yp2.tolist())
                             answer_dict.update(answer_dict_)
                             losses.append(loss)
                         except tf.errors.OutOfRangeError as e:
@@ -182,3 +188,4 @@ with tf.Session() as sess:
                 break
 
             it += 1
+        # break

@@ -2,10 +2,12 @@
 QAnet implementation by Dewal Gupta
 """
 
-import math
 import tensorflow as tf
 import numpy as np
 from configparser import ConfigParser, ExtendedInterpolation
+
+_DEBUG = False
+
 
 class QANet:
     def __init__(self, word_emb, char_emb, is_training=True):
@@ -271,7 +273,7 @@ class EncoderBlk:
         x = tf.expand_dims(inputs, 2)
         for i in range(self.num_conv_layers):
             residual = x
-            x = tf.contrib.layers.layer_norm(x)
+            x = tf.contrib.layers.layer_norm(x, trainable=True)
             depthwise_filter = tf.get_variable("depthwise_filter",
                                                (self.kernel_size, 1, self.dim, 1),
                                                dtype=tf.float32,
@@ -282,11 +284,11 @@ class EncoderBlk:
                                                regularizer=self.l2_regularizer)
 
             x = tf.nn.separable_conv2d(x, depthwise_filter,
-                                         pointwise_filter,
-                                         strides=(1, 1, 1, 1),
-                                         padding="SAME")
+                                       pointwise_filter,
+                                       strides=(1, 1, 1, 1),
+                                       padding="SAME")
 
-            x = residual + x
+            x = tf.add(residual, x)
             if (i+1)%2 == 0:
                 x = tf.layers.dropout(x, 1.0-self.dropout_keep_prob, training=self.is_training)
 
@@ -319,19 +321,17 @@ class EncoderBlk:
         out = tf.layers.dense(inputs_norm, self.num_filters, activation=tf.nn.relu,
                               use_bias=True)
         out = tf.layers.dropout(out, 1.0-self.dropout_keep_prob, training=self.is_training)
-        return inputs+out
+        return tf.add(inputs, out)
 
     def forward(self, inputs):
-        # print("before")
-        # print(inputs)
         inputs = self.project(inputs)
-        # print("after")
-        # print(inputs)
         for _ in range(self.num_blks):
-            out = self.pos_enc(inputs)
-            out = self.convolve(out)
-            out = self.self_att(out)
-            out = self.feed_forward(out)
+            with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
+                out = self.pos_enc(inputs)
+                out = self.convolve(out)
+                out = self.self_att(out)
+                # out = tf.Print(out, [out])
+                out = self.feed_forward(out)
 
         return out
 
