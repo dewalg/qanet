@@ -173,6 +173,14 @@ class QANet:
         return tf.concat([c, A, c*A, c*B], axis=2)
 
     def out(self, model_out_0, model_out_1):
+        """
+        Outputs a prediction tensor given the two stacked encoder outputs from
+        the previous layer. Adapted to work for both start and end pointers. 
+        :param model_out_0: output from first block
+        :param model_out_1: output from either second or third block, depending
+         on whether this is for the start or end pointer. 
+        :return: a tensor representing the probabilities of the start/end of the answer 
+        """
         W = tf.get_variable("W", [self.N, self.enc_dim * 2, 1])
         inp = tf.concat([model_out_0, model_out_1], axis=2)
         inp = tf.squeeze(tf.matmul(inp, W))
