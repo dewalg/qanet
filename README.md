@@ -36,7 +36,7 @@ layers but uses helper functions and classes to do so. These specifics are detai
 
 Files: ```model.py```
 
-###Input Embedding Layer
+### Input Embedding Layer
 The input embedding layer is similar to Seo et al's embedding layers. Essentially, 
 the Glove embeddings per word and the character embeddings are obtained by using 
 a 1D convolution on the character embeddings and finding the largest element per row, then 
@@ -52,7 +52,7 @@ performances showing that a 200 dimensional embedding isn't entirely necessary.
 
 See function ```embed(self, word, char, is_context=False)```
 
-###Embedding Encoding Layer
+### Embedding Encoding Layer
 The encoding layer is built using the stacked modules that are novel to this paper. We used
 the same hyperparameters as the paper suggested and implemented this stacked block as a separate
 class, ```EncoderBlk```. Each block consists of a positional encoding, convolutions, a self attention
@@ -69,7 +69,7 @@ the implementation is not my own. It was originally implemented by @DongjunLee (
 
 See ```class EncoderBlk```
 
-###Context-Query Layer
+### Context-Query Layer
 This layer was implemented using tf.map_fn due to the fact that we are working in batches, and I could not find a
 more efficient, batch-friendly way to implement these transformations. 
 
@@ -78,12 +78,12 @@ using the same transformations as defined by Seo et al. in their BiDAF network.
 
 See function ```context_query_att(self, c, q):```
 
-###Model Encoder Layer
+### Model Encoder Layer
 The model encoder layer is composed of 3 of the same encoder set of blocks with 7 blocks in one set. The same
 encoder block class is used (initialized in the QANet constructor). The same hyperparameters are used for the
 implementations of these blocks, and the weights are shared between all 3 sets of blocks. 
 
-###Output Layer
+### Output Layer
 This is a relatively simple layer just responsible for predicting the start and end indices of the answer. 
 There are two branches (one to predict start, and the other the end). The start branch takes the concatenated
 output of the first 2 sets of encoder blocks, whereas the end branch takes the concatenated output from the 
