@@ -72,7 +72,8 @@ def convert_tokens(eval_file, qa_id, pp1, pp2):
         uuid = eval_file[str(qid)]["uuid"]
 
         if p1 >= len(spans) or p2 >= len(spans):
-            continue
+            p1 = 0
+            p2 = 0
 
         start_idx = spans[p1][0]
         end_idx = spans[p2][1]

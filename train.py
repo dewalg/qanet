@@ -2,6 +2,7 @@ import os
 import json
 from util import *
 from model import *
+from comet_ml import Experiment
 
 config = ConfigParser(interpolation=ExtendedInterpolation())
 config.read('config.ini')
@@ -53,9 +54,6 @@ with open(config['paths']['dev_meta'], "r") as fh:
 word_mat = tf.constant(word_emb, dtype=tf.float32)
 char_mat = tf.constant(char_emb, dtype=tf.float32)
 
-# load the model
-model = QANet(word_emb, char_emb)
-
 # load the TRAIN dataset
 parser = get_record_parser()
 train_data = get_batch_dataset(config['paths']['TRAIN_REC'], parser)
@@ -69,6 +67,10 @@ val_it = val_data.make_one_shot_iterator()
 val_init_op = val_it.make_initializer(val_data)
 is_training = tf.placeholder(tf.bool)
 
+experiment = Experiment(api_key="CwfC44eKOZx1oFdva2nDp3P8i", project_name="nlp")
+hyper_params = {"learning_rate": config['hp'].getfloat('LR'), "batch_size": config['dim'].getint('batch_size')}
+experiment.log_multiple_params(hyper_params)
+
 #build the optimizer
 # lr = tf.minimum(config.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(global_step, tf.float32) + 1))
 opt = tf.train.AdamOptimizer(learning_rate=config['hp'].getfloat('LR'),
@@ -77,12 +79,15 @@ opt = tf.train.AdamOptimizer(learning_rate=config['hp'].getfloat('LR'),
 tower_grads = []
 tower_losses = []
 with tf.variable_scope('gpu', reuse=tf.AUTO_REUSE):
+    # load the model
+    model = QANet(word_emb, char_emb)
+
     for i in range(num_gpus):
         with tf.device('/gpu:%d' % i):
             with tf.name_scope('gpu_%d' % i) as scope:
                 c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
-                                                  lambda: train_it.get_next(),
-                                                  lambda: val_it.get_next())
+                                                      lambda: train_it.get_next(),
+                                                      lambda: val_it.get_next())
 
                 # forward inference
                 p1_logits, p2_logits = model.forward(c, q, ch, qh)
@@ -143,13 +148,17 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
         while True:
             try:
                 _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
+                experiment.log_metric("loss", loss)
 
                 if it % DISPLAY_ITER == 0:
                     tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
                     loss_summ = tf.Summary(value=[
                         tf.Summary.Value(tag="train_loss", simple_value=loss)
                     ])
+
                     summary_writer.add_summary(loss_summ, it)
+                    sum_str = sess.run(summary_op)
+                    summary_writer.add_summary(sum_str, it)
 
                 if it % SAVE_ITER == 0 and it > 0:
                     saver.save(sess, os.path.join(ckpt_path, 'model_ckpt'), it)
@@ -162,13 +171,14 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                     step = 0
                     while step < 157:
                         try:
-                            _id, loss, yp1, yp2 = sess.run([qa_id, avg_loss, p1, p2], feed_dict={is_training: False})
+                            _id, vloss, yp1, yp2 = sess.run([qa_id, avg_loss, p1, p2], feed_dict={is_training: False})
+                            experiment.log_metric("val_loss", vloss)
 
-                            tf.logging.info('step %d, loss = %f', step, loss)
+                            tf.logging.info('step %d, loss = %f', step, vloss)
                             answer_dict_, _ = convert_tokens(
                                 dev_eval_f, _id.tolist(), yp1.tolist(), yp2.tolist())
                             answer_dict.update(answer_dict_)
-                            losses.append(loss)
+                            losses.append(vloss)
                             step += 1
                         except tf.errors.OutOfRangeError as e:
                             break
@@ -184,8 +194,13 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                         tag="val/em", simple_value=metrics["exact_match"]), ])
 
                     tf.logging.info('val loss: %f', metrics['loss'])
+                    experiment.log_metric("val_avg_loss", loss)
+
                     tf.logging.info('val f1: %f', metrics['f1'])
+                    experiment.log_metric("val_f1", metrics['f1'])
+
                     tf.logging.info('val em: %f', metrics['exact_match'])
+                    experiment.log_metric("val_em", metrics['exact_match'])
 
                     # add val metrics to summary
                     to_write = [loss_sum, f1_sum, em_sum]
