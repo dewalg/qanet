@@ -322,16 +322,13 @@ class EncoderBlk:
         return inputs+out
 
     def forward(self, inputs):
-        # print("before")
-        # print(inputs)
         inputs = self.project(inputs)
-        # print("after")
-        # print(inputs)
         for _ in range(self.num_blks):
-            out = self.pos_enc(inputs)
-            out = self.convolve(out)
-            out = self.self_att(out)
-            out = self.feed_forward(out)
+            with tf.variable_scope("enc_block"):
+                out = self.pos_enc(inputs)
+                out = self.convolve(out)
+                out = self.self_att(out)
+                out = self.feed_forward(out)
 
         return out
 

@@ -49,7 +49,8 @@ def get_record_parser(is_test=False):
 def get_batch_dataset(record_file, parser):
     num_threads = tf.constant(config['dim'].getint('num_threads'), dtype=tf.int32)
     dataset = tf.data.TFRecordDataset(record_file).map(
-        parser, num_parallel_calls=num_threads).shuffle(config['dim'].getint('shuffle_size')).repeat()
+        # parser, num_parallel_calls=num_threads).shuffle(config['dim'].getint('shuffle_size')).repeat()
+        parser).shuffle(config['dim'].getint('shuffle_size'))
     dataset = dataset.batch(config['dim'].getint('batch_size'))
     return dataset
 
@@ -57,7 +58,8 @@ def get_batch_dataset(record_file, parser):
 def get_dataset(record_file, parser):
     num_threads = tf.constant(config['dim'].getint('num_threads'), dtype=tf.int32)
     dataset = tf.data.TFRecordDataset(record_file).map(
-        parser, num_parallel_calls=num_threads).repeat().batch(config['dim'].getint('batch_size'))
+        # parser, num_parallel_calls=num_threads).repeat().batch(config['dim'].getint('batch_size'))
+        parser).repeat().batch(config['dim'].getint('batch_size'))
     return dataset
 
 
@@ -68,6 +70,10 @@ def convert_tokens(eval_file, qa_id, pp1, pp2):
         context = eval_file[str(qid)]["context"]
         spans = eval_file[str(qid)]["spans"]
         uuid = eval_file[str(qid)]["uuid"]
+
+        if p1 >= len(spans) or p2 >= len(spans):
+            continue
+
         start_idx = spans[p1][0]
         end_idx = spans[p2][1]
         answer_dict[str(qid)] = context[start_idx: end_idx]

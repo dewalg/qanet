@@ -76,43 +76,34 @@ opt = tf.train.AdamOptimizer(learning_rate=config['hp'].getfloat('LR'),
                              use_locking=False)
 tower_grads = []
 tower_losses = []
-with tf.variable_scope('gpu', reuse=tf.AUTO_REUSE):
-    for i in range(num_gpus):
-        with tf.device('/gpu:%d' % i):
-            with tf.name_scope('gpu_%d' % i) as scope:
-                c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
+for i in range(num_gpus):
+    with tf.device('/gpu:%d' % i):
+        # with tf.name_scope('gpu_%d' % i):
+        with tf.variable_scope('gpu_%d' % i, reuse=tf.AUTO_REUSE):
+            c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
                                                   lambda: train_it.get_next(),
                                                   lambda: val_it.get_next())
 
-                # forward inference
-                p1_logits, p2_logits = model.forward(c, q, ch, qh)
-                p1 = tf.argmax(p1_logits, axis=1)
-                p2 = tf.argmax(p2_logits, axis=1)
+            # forward inference
+            p1_logits, p2_logits = model.forward(c, q, ch, qh)
+            p1 = tf.argmax(p1_logits, axis=1)
+            p2 = tf.argmax(p2_logits, axis=1)
 
-                summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-                # get the loss
-                loss = model.get_loss(p1_logits, p2_logits, y1, y2)
-                tower_losses.append(loss)
+            # get the loss
+            loss = model.get_loss(p1_logits, p2_logits, y1, y2)
+            tower_losses.append(loss)
 
-                ## reuse variables for next call
-                tf.get_variable_scope().reuse_variables()
+            ## reuse variables for next call
+            tf.get_variable_scope().reuse_variables()
 
-                grads = opt.compute_gradients(loss)
-                tower_grads.append(grads)
+            grads = opt.compute_gradients(loss)
+            tower_grads.append(grads)
 
-                avg_loss = tf.reduce_mean(tower_losses)
-                grads = average_gradients(tower_grads)
-
-for grad, var in grads:
-    if grad is not None:
-        summaries.append(tf.summary.histogram(var.op.name + '/gradients', grad))
-
+avg_loss = tf.reduce_mean(tower_losses)
+grads = average_gradients(tower_grads)
 train_op = opt.apply_gradients(grads)
-for var in tf.trainable_variables():
-    summaries.append(tf.summary.histogram(var.op.name, var))
 
-summary_op = tf.summary.merge(summaries)
 
 # saver
 saver = tf.train.Saver(max_to_keep=3)
@@ -123,7 +114,7 @@ ckpt_path = os.path.join(save_dir, 'ckpt')
 if not os.path.exists(ckpt_path):
     os.mkdir(ckpt_path)
 
-with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
+with tf.Session(config=tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)) as sess:
     # initialize the graph
     sess.run(tf.global_variables_initializer())
 
@@ -142,19 +133,9 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
         sess.run([train_init_op, val_init_op])
         while True:
             try:
-                _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
+#                _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
 
-                if it % DISPLAY_ITER == 0:
-                    tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
-                    loss_summ = tf.Summary(value=[
-                        tf.Summary.Value(tag="train_loss", simple_value=loss)
-                    ])
-                    summary_writer.add_summary(loss_summ, it)
-
-                if it % SAVE_ITER == 0 and it > 0:
-                    saver.save(sess, os.path.join(ckpt_path, 'model_ckpt'), it)
-
-                if it % VAL_ITER == 0 and it > 0:
+                if it % VAL_ITER == 0 and it == 0:
                     sess.run(val_init_op)
                     tf.logging.info('validating...')
                     answer_dict = {}
@@ -191,6 +172,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                     to_write = [loss_sum, f1_sum, em_sum]
                     for metric in to_write:
                         summary_writer.add_summary(metric, it)
+
+                    break
 
             except tf.errors.OutOfRangeError:
                 break
