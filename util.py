@@ -51,7 +51,8 @@ def get_batch_dataset(record_file, parser):
     dataset = tf.data.TFRecordDataset(record_file).map(
         # parser, num_parallel_calls=num_threads).shuffle(config['dim'].getint('shuffle_size')).repeat()
         parser).shuffle(config['dim'].getint('shuffle_size'))
-    dataset = dataset.batch(config['dim'].getint('batch_size'))
+#    dataset = dataset.batch(config['dim'].getint('batch_size'))
+    dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(config['dim'].getint('batch_size')))
     return dataset
 
 

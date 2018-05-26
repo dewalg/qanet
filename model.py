@@ -8,7 +8,7 @@ from configparser import ConfigParser, ExtendedInterpolation
 from extra import batch_dot, dot, mask_logits
 
 
-_DEBUG = True
+_DEBUG = False
 
 
 class QANet:

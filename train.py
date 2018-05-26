@@ -154,7 +154,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
             _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
             experiment.log_metric("loss", loss)
             # summary_writer.add_run_metadata(run_metadata, 'step001')
-            tf.logging.info('step %d, loss = %f', it, loss)
+            tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
+            it += 1
 
             if it % SUM_ITER:
                 summary_str = sess.run(summary_op, feed_dict={is_training: True})
@@ -193,6 +194,9 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                 tf.logging.info('val f1: %f', metrics['f1'])
                 tf.logging.info('val em: %f', metrics['exact_match'])
 
+                experiment.log_metric("val loss", metrics['loss'])
+                experiment.log_metric("val f1", metrics['f1'])
+                experiment.log_metric("val em", metrics['exact_match'])
                 # add val metrics to summary
                 to_write = [loss_sum, f1_sum, em_sum]
                 for metric in to_write:
