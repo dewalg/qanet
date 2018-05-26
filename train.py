@@ -166,6 +166,9 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                     ])
                     summary_writer.add_summary(loss_summ, it)
 
+                if it % SAVE_ITER == 0 and it > 0:
+                    saver.save(sess, os.path.join(ckpt_path, 'model_ckpt'), it)
+
                 if it % SUM_ITER:
                     summary_str = sess.run(summary_op, feed_dict={is_training: True})
                     summary_writer.add_summary(summary_str, it)
