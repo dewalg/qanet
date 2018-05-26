@@ -2,10 +2,14 @@
 QAnet implementation by Dewal Gupta
 """
 
-import math
 import tensorflow as tf
 import numpy as np
 from configparser import ConfigParser, ExtendedInterpolation
+from extra import batch_dot, dot, mask_logits
+
+
+_DEBUG = True
+
 
 class QANet:
     def __init__(self, word_emb, char_emb, is_training=True):
@@ -185,32 +189,107 @@ class QANet:
         p = tf.argmax(logits, axis=1)
         return logits, p
 
+    def optimized_trilinear_for_attention(self, c, q):
+        args = [c, q]
+        arg0_shape = c.get_shape().as_list()
+        arg1_shape = q.get_shape().as_list()
+        if len(arg0_shape) != 3 or len(arg1_shape) != 3:
+            raise ValueError("`args` must be 3 dims (batch_size, len, dimension)")
+        if arg0_shape[2] != arg1_shape[2]:
+            raise ValueError("the last dimension of `args` must equal")
+        arg_size = arg0_shape[2]
+        dtype = c.dtype
+        droped_args = [tf.nn.dropout(arg, 1.0-self.dropout) for arg in args]
+        # droped_args = args
+        weights4arg0 = tf.get_variable(
+            "linear_kernel4arg0", (arg_size, 1),
+            # dtype=dtype,
+            # regularizer=self.l2_regularizer,
+            # initializer=tf.zeros_initializer())
+        )
+        weights4arg1 = tf.get_variable(
+            "linear_kernel4arg1", [arg_size, 1],
+            # dtype=dtype,
+            # regularizer=self.l2_regularizer,
+            # initializer=tf.zeros_initializer())
+        )
+        weights4mlu = tf.get_variable(
+            "linear_kernel4mul", [1, 1, arg_size],
+            # dtype=dtype,
+            # regularizer=self.l2_regularizer,
+            # initializer=tf.zeros_initializer())
+        )
+        biases = tf.get_variable(
+            "linear_bias", [self.con_lim, self.ques_lim],
+            # "lbxyz", shape=[2, 400, 50],
+            # dtype=dtype,
+            # regularizer=self.l2_regularizer,
+            # initializer=tf.zeros_initializer())
+        )
+
+        subres0 = tf.tile(dot(droped_args[0], weights4arg0), [1, 1, self.ques_lim])
+        if _DEBUG: print('SUBRES0 : ', subres0.shape)
+
+        subres1 = tf.tile(tf.transpose(dot(droped_args[1], weights4arg1), perm=(0, 2, 1)), [1, self.con_lim, 1])
+        if _DEBUG: print('SUBRES1 : ', subres1.shape)
+
+        subres2 = batch_dot(droped_args[0] * weights4mlu, tf.transpose(droped_args[1], perm=(0, 2, 1)))
+        if _DEBUG: print('SUBRES2 : ', subres2.shape)
+
+        S = subres0 + subres1 + subres2
+        if _DEBUG: print('S: ', S.shape)
+
+        batch_bias = tf.stack([biases]*self.N, axis=0)
+        S = tf.add(S, batch_bias)
+
+        # q_mask = tf.cast(q, tf.bool)
+        # c_mask = tf.cast(c, tf.bool)
+        # mask_q = tf.expand_dims(q_mask, 1)
+        # S_ = tf.nn.softmax(self.mask_logits(S, mask=mask_q))
+        S_ = tf.nn.softmax(S)
+        # mask_c = tf.expand_dims(c_mask, 2)
+        # S_T = tf.transpose(tf.nn.softmax(mask_logits(S, mask=mask_c), dim=1), (0, 2, 1))
+        S_T = tf.transpose(tf.nn.softmax(S), perm=(0, 2, 1))
+        c2q = tf.matmul(S_, q)
+        q2c = tf.matmul(tf.matmul(S_, S_T), c)
+        attention_outputs = tf.concat([c, c2q, c * c2q, c * q2c], axis=2)
+
+        return attention_outputs
+
     def forward(self, context, ques, context_char, ques_char):
+        if _DEBUG: print('INPUT (c, q, ch, qh): ', context.shape, ques.shape, context_char.shape, ques_char.shape)
         # get word and character embeddings
         with tf.variable_scope("embedding", reuse=tf.AUTO_REUSE):
             c_emb = self.embed(context, context_char, is_context=True)
             q_emb = self.embed(ques, ques_char)
 
+        if _DEBUG: print('EMBEDDED (c_emb, q_emb): ', c_emb.shape, q_emb.shape)
         # encode the embeddings
         with tf.variable_scope("encoding", reuse=tf.AUTO_REUSE):
             c = self.emb_encoder.forward(c_emb)
             q = self.emb_encoder.forward(q_emb)
 
+        if _DEBUG: print('ENCODED (c, q): ', c.shape, q.shape)
         # apply the context-query attention similar to BiDAF model
         with tf.variable_scope("attention", reuse=tf.AUTO_REUSE):
-            att = self.context_query_att(c, q)
+            # att = self.context_query_att(c, q)
+            att = self.optimized_trilinear_for_attention(c, q)
+            # att = tf.get_variable("att", shape=[2, 400, 50])
 
+        if _DEBUG: print('ATTENTION (att): ', att.shape)
         with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
             model_0 = self.model_blk_1.forward(att)
             model_1 = self.model_blk_2.forward(model_0)
             model_2 = self.model_blk_3.forward(model_1)
 
+        if _DEBUG: print('MODELS (m0, m1, m2): ', model_0.shape, model_1.shape, model_2.shape)
         with tf.variable_scope("out_p1"):
             p1_logits, p1 = self.out(model_0, model_1)
 
         with tf.variable_scope("out_p2"):
             p2_logits, p2 = self.out(model_0, model_2)
 
+        if _DEBUG: print('OUT: ', p1_logits.shape)
         return p1_logits, p2_logits
 
     def get_loss(self, p_logits_1, p_logits_2, actual_1, actual_2):
