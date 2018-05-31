@@ -180,10 +180,10 @@ class QANet:
         inp = tf.squeeze(tf.matmul(inp, W))
 
         # scale the tensor so softmax doesn't blow up
-        inp = tf.div(
-            tf.subtract(inp, tf.reduce_min(inp)),
-            tf.subtract(tf.reduce_max(inp), tf.reduce_min(inp))
-        )
+        # inp = tf.div(
+        #     tf.subtract(inp, tf.reduce_min(inp)),
+        #     tf.subtract(tf.reduce_max(inp), tf.reduce_min(inp))
+        # )
 
         logits = tf.nn.softmax(inp)
         p = tf.argmax(logits, axis=1)
@@ -198,32 +198,29 @@ class QANet:
         if arg0_shape[2] != arg1_shape[2]:
             raise ValueError("the last dimension of `args` must equal")
         arg_size = arg0_shape[2]
-        dtype = c.dtype
         droped_args = [tf.nn.dropout(arg, 1.0-self.dropout) for arg in args]
-        # droped_args = args
         weights4arg0 = tf.get_variable(
             "linear_kernel4arg0", (arg_size, 1),
             # dtype=dtype,
-            # regularizer=self.l2_regularizer,
+            regularizer=self.l2_regularizer,
             # initializer=tf.zeros_initializer())
         )
         weights4arg1 = tf.get_variable(
             "linear_kernel4arg1", [arg_size, 1],
             # dtype=dtype,
-            # regularizer=self.l2_regularizer,
+            regularizer=self.l2_regularizer,
             # initializer=tf.zeros_initializer())
         )
         weights4mlu = tf.get_variable(
             "linear_kernel4mul", [1, 1, arg_size],
             # dtype=dtype,
-            # regularizer=self.l2_regularizer,
+            regularizer=self.l2_regularizer,
             # initializer=tf.zeros_initializer())
         )
         biases = tf.get_variable(
             "linear_bias", [self.con_lim, self.ques_lim],
-            # "lbxyz", shape=[2, 400, 50],
             # dtype=dtype,
-            # regularizer=self.l2_regularizer,
+            regularizer=self.l2_regularizer,
             # initializer=tf.zeros_initializer())
         )
 
@@ -277,9 +274,13 @@ class QANet:
             # att = tf.get_variable("att", shape=[2, 400, 50])
 
         if _DEBUG: print('ATTENTION (att): ', att.shape)
-        with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
+        with tf.variable_scope("model_1", reuse=tf.AUTO_REUSE):
             model_0 = self.model_blk_1.forward(att)
+
+        with tf.variable_scope("model_2", reuse=tf.AUTO_REUSE):
             model_1 = self.model_blk_2.forward(model_0)
+
+        with tf.variable_scope("model_3", reuse=tf.AUTO_REUSE):
             model_2 = self.model_blk_3.forward(model_1)
 
         if _DEBUG: print('MODELS (m0, m1, m2): ', model_0.shape, model_1.shape, model_2.shape)
@@ -293,11 +294,16 @@ class QANet:
         return p1_logits, p2_logits
 
     def get_loss(self, p_logits_1, p_logits_2, actual_1, actual_2):
-        p1 = tf.reduce_sum(p_logits_1*actual_1, axis=1)
-        p2 = tf.reduce_sum(p_logits_2*actual_2, axis=1)
-        p1 = tf.reduce_sum(tf.log(p1))
-        p2 = tf.reduce_sum(tf.log(p2))
-        return -1 * (p1+p2) / self.N
+        # p1 = tf.reduce_sum(p_logits_1*actual_1, axis=1)
+        # p2 = tf.reduce_sum(p_logits_2*actual_2, axis=1)
+        # p1 = tf.reduce_sum(tf.log(p1))
+        # p2 = tf.reduce_sum(tf.log(p2))
+        # return -1 * (p1+p2) / self.N
+        losses = tf.nn.softmax_cross_entropy_with_logits(
+            logits=p_logits_1, labels=actual_1)
+        losses2 = tf.nn.softmax_cross_entropy_with_logits(
+            logits=p_logits_2, labels=actual_2)
+        return tf.reduce_mean(losses + losses2)
 
 
 class EncoderBlk:
