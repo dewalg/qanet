@@ -41,29 +41,29 @@ class QANet:
         self.dropout = 0.1
 
         # encoder blocks
-        self.emb_encoder = EncoderBlk(self.emb_num_blocks,
-                                      self.emb_num_conv_layers,
-                                      self.emb_kernel_size,
-                                      self.enc_dim,
-                                      self.is_training)
+        # self.emb_encoder = EncoderBlk(self.emb_num_blocks,
+        #                               self.emb_num_conv_layers,
+        #                               self.emb_kernel_size,
+        #                               self.enc_dim,
+        #                               self.is_training)
 
-        self.model_blk_1 = EncoderBlk(self.model_num_blocks,
-                                      self.model_num_conv_layers,
-                                      self.emb_kernel_size,
-                                      self.enc_dim,
-                                      self.is_training)
-
-        self.model_blk_2 = EncoderBlk(self.model_num_blocks,
-                                      self.model_num_conv_layers,
-                                      self.emb_kernel_size,
-                                      self.enc_dim,
-                                      self.is_training)
-
-        self.model_blk_3 = EncoderBlk(self.model_num_blocks,
-                                      self.model_num_conv_layers,
-                                      self.emb_kernel_size,
-                                      self.enc_dim,
-                                      self.is_training)
+        # self.model_blk_1 = EncoderBlk(self.model_num_blocks,
+        #                               self.model_num_conv_layers,
+        #                               self.emb_kernel_size,
+        #                               self.enc_dim,
+        #                               self.is_training)
+        #
+        # self.model_blk_2 = EncoderBlk(self.model_num_blocks,
+        #                               self.model_num_conv_layers,
+        #                               self.emb_kernel_size,
+        #                               self.enc_dim,
+        #                               self.is_training)
+        #
+        # self.model_blk_3 = EncoderBlk(self.model_num_blocks,
+        #                               self.model_num_conv_layers,
+        #                               self.emb_kernel_size,
+        #                               self.enc_dim,
+        #                               self.is_training)
 
     def embed(self, word, char, is_context=False):
         """
@@ -263,8 +263,14 @@ class QANet:
         if _DEBUG: print('EMBEDDED (c_emb, q_emb): ', c_emb.shape, q_emb.shape)
         # encode the embeddings
         with tf.variable_scope("encoding", reuse=tf.AUTO_REUSE):
-            c = self.emb_encoder.forward(c_emb)
-            q = self.emb_encoder.forward(q_emb)
+            emb_encoder = EncoderBlk(self.emb_num_blocks,
+                                     self.emb_num_conv_layers,
+                                     self.emb_kernel_size,
+                                     self.enc_dim,
+                                     self.is_training)
+
+            c = emb_encoder.forward(c_emb)
+            q = emb_encoder.forward(q_emb)
 
         if _DEBUG: print('ENCODED (c, q): ', c.shape, q.shape)
         # apply the context-query attention similar to BiDAF model
@@ -273,15 +279,31 @@ class QANet:
             att = self.optimized_trilinear_for_attention(c, q)
             # att = tf.get_variable("att", shape=[2, 400, 50])
 
+
         if _DEBUG: print('ATTENTION (att): ', att.shape)
         with tf.variable_scope("model_1", reuse=tf.AUTO_REUSE):
-            model_0 = self.model_blk_1.forward(att)
+            model_blk_1 = EncoderBlk(self.model_num_blocks,
+                                      self.model_num_conv_layers,
+                                      self.emb_kernel_size,
+                                      self.enc_dim,
+                                      self.is_training)
+            model_0 = model_blk_1.forward(att)
 
         with tf.variable_scope("model_2", reuse=tf.AUTO_REUSE):
-            model_1 = self.model_blk_2.forward(model_0)
+            model_blk_2 = EncoderBlk(self.model_num_blocks,
+                                     self.model_num_conv_layers,
+                                     self.emb_kernel_size,
+                                     self.enc_dim,
+                                     self.is_training)
+            model_1 = model_blk_2.forward(model_0)
 
         with tf.variable_scope("model_3", reuse=tf.AUTO_REUSE):
-            model_2 = self.model_blk_3.forward(model_1)
+            model_blk_3 = EncoderBlk(self.model_num_blocks,
+                                     self.model_num_conv_layers,
+                                     self.emb_kernel_size,
+                                     self.enc_dim,
+                                     self.is_training)
+            model_2 = model_blk_3.forward(model_1)
 
         if _DEBUG: print('MODELS (m0, m1, m2): ', model_0.shape, model_1.shape, model_2.shape)
         with tf.variable_scope("out_p1"):
@@ -324,10 +346,6 @@ class EncoderBlk:
         self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
 
         # self attention
-        self.attention = Attention(linear_key_dim=self.dim,
-                                   linear_value_dim=self.dim,
-                                   model_dim=self.dim,
-                                   dropout=(1.0 - self.dropout_keep_prob))
 
     def pos_enc(self, inputs):
         """
@@ -392,11 +410,18 @@ class EncoderBlk:
         return emb
 
     def self_att(self, inputs):
-        inputs_norm = tf.contrib.layers.layer_norm(inputs)
-        K = tf.layers.dense(inputs_norm, self.dim)
-        V = tf.layers.dense(inputs_norm, self.dim)
-        Q = tf.layers.dense(inputs_norm, self.dim)
-        out = self.attention.multi_head(Q, K, V)
+        with tf.variable_scope("multi_head_att", reuse=tf.AUTO_REUSE):
+            attention = Attention(linear_key_dim=self.dim,
+                                  linear_value_dim=self.dim,
+                                  model_dim=self.dim,
+                                  dropout=(1.0 - self.dropout_keep_prob))
+
+            inputs_norm = tf.contrib.layers.layer_norm(inputs)
+            K = tf.layers.dense(inputs_norm, self.dim)
+            V = tf.layers.dense(inputs_norm, self.dim)
+            Q = tf.layers.dense(inputs_norm, self.dim)
+            out = attention.multi_head(Q, K, V)
+
         return inputs + out
 
     def feed_forward(self, inputs):
