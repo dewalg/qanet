@@ -274,36 +274,37 @@ class QANet:
 
         if _DEBUG: print('ENCODED (c, q): ', c.shape, q.shape)
         # apply the context-query attention similar to BiDAF model
-        with tf.variable_scope("attention", reuse=tf.AUTO_REUSE):
+        with tf.variable_scope("attention"):
             # att = self.context_query_att(c, q)
             att = self.optimized_trilinear_for_attention(c, q)
             # att = tf.get_variable("att", shape=[2, 400, 50])
 
-
         if _DEBUG: print('ATTENTION (att): ', att.shape)
-        with tf.variable_scope("model_1", reuse=tf.AUTO_REUSE):
-            model_blk_1 = EncoderBlk(self.model_num_blocks,
-                                      self.model_num_conv_layers,
-                                      self.emb_kernel_size,
-                                      self.enc_dim,
-                                      self.is_training)
-            model_0 = model_blk_1.forward(att)
+        with tf.variable_scope("model", reuse=tf.AUTO_REUSE):
+            model_blk = EncoderBlk(self.model_num_blocks,
+                                   self.model_num_conv_layers,
+                                   self.emb_kernel_size,
+                                   self.enc_dim,
+                                   self.is_training)
+            model_0 = model_blk.forward(att)
+            model_1 = model_blk.forward(model_0)
+            model_2 = model_blk.forward(model_1)
 
-        with tf.variable_scope("model_2", reuse=tf.AUTO_REUSE):
-            model_blk_2 = EncoderBlk(self.model_num_blocks,
-                                     self.model_num_conv_layers,
-                                     self.emb_kernel_size,
-                                     self.enc_dim,
-                                     self.is_training)
-            model_1 = model_blk_2.forward(model_0)
-
-        with tf.variable_scope("model_3", reuse=tf.AUTO_REUSE):
-            model_blk_3 = EncoderBlk(self.model_num_blocks,
-                                     self.model_num_conv_layers,
-                                     self.emb_kernel_size,
-                                     self.enc_dim,
-                                     self.is_training)
-            model_2 = model_blk_3.forward(model_1)
+        # with tf.variable_scope("model_2"):
+        #     model_blk_2 = EncoderBlk(self.model_num_blocks,
+        #                              self.model_num_conv_layers,
+        #                              self.emb_kernel_size,
+        #                              self.enc_dim,
+        #                              self.is_training)
+        #     model_1 = model_blk_2.forward(model_0)
+        #
+        # with tf.variable_scope("model_3"):
+        #     model_blk_3 = EncoderBlk(self.model_num_blocks,
+        #                              self.model_num_conv_layers,
+        #                              self.emb_kernel_size,
+        #                              self.enc_dim,
+        #                              self.is_training)
+        #     model_2 = model_blk_3.forward(model_1)
 
         if _DEBUG: print('MODELS (m0, m1, m2): ', model_0.shape, model_1.shape, model_2.shape)
         with tf.variable_scope("out_p1"):
@@ -347,21 +348,21 @@ class EncoderBlk:
 
         # self attention
 
-    def pos_enc(self, inputs):
-        """
-        encodes the position into the vector as described by
-        Vaswani et al. (https://arxiv.org/pdf/1706.03762.pdf)
-        :param inputs: the embedded inputs of shape 'batch' by L by D
-        :return: output with the positional encoding 
-            the output is the same shape as input
-        """
-        length = inputs.get_shape().as_list()[1]
-        encoded_vec = np.array(
-            [pos / np.power(10000, 2 * i / self.dim) for pos in range(length) for i in range(self.dim)])
-        encoded_vec[::2] = np.sin(encoded_vec[::2])
-        encoded_vec[1::2] = np.cos(encoded_vec[1::2])
-        encoded_vec = tf.convert_to_tensor(encoded_vec.reshape([length, self.dim]), dtype=tf.float32)
-        return inputs + encoded_vec
+    # def pos_enc(self, inputs):
+    #     """
+    #     encodes the position into the vector as described by
+    #     Vaswani et al. (https://arxiv.org/pdf/1706.03762.pdf)
+    #     :param inputs: the embedded inputs of shape 'batch' by L by D
+    #     :return: output with the positional encoding
+    #         the output is the same shape as input
+    #     """
+    #     length = inputs.get_shape().as_list()[1]
+    #     encoded_vec = np.array(
+    #         [pos / np.power(10000, 2 * i / self.dim) for pos in range(length) for i in range(self.dim)])
+    #     encoded_vec[::2] = np.sin(encoded_vec[::2])
+    #     encoded_vec[1::2] = np.cos(encoded_vec[1::2])
+    #     encoded_vec = tf.convert_to_tensor(encoded_vec.reshape([length, self.dim]), dtype=tf.float32)
+    #     return inputs + encoded_vec
 
     def convolve(self, inputs):
         """
@@ -375,19 +376,19 @@ class EncoderBlk:
         for i in range(self.num_conv_layers):
             residual = x
             x = tf.contrib.layers.layer_norm(x)
-            depthwise_filter = tf.get_variable("depthwise_filter",
+            depthwise_filter = tf.get_variable("depthwise_filter_%d" % i,
                                                (self.kernel_size, 1, self.dim, 1),
                                                dtype=tf.float32,
                                                regularizer=self.l2_regularizer)
-            pointwise_filter = tf.get_variable("pointwise_filter",
+            pointwise_filter = tf.get_variable("pointwise_filter_%d" % i,
                                                (1, 1, self.dim, self.num_filters),
                                                dtype=tf.float32,
                                                regularizer=self.l2_regularizer)
 
             x = tf.nn.separable_conv2d(x, depthwise_filter,
-                                         pointwise_filter,
-                                         strides=(1, 1, 1, 1),
-                                         padding="SAME")
+                                       pointwise_filter,
+                                       strides=(1, 1, 1, 1),
+                                       padding="SAME")
 
             x = residual + x
             if (i+1)%2 == 0:
@@ -432,10 +433,11 @@ class EncoderBlk:
         return inputs+out
 
     def forward(self, inputs):
-        inputs = self.project(inputs)
-        for _ in range(self.num_blks):
-            with tf.variable_scope("enc_block"):
-                out = self.pos_enc(inputs)
+        out = self.project(inputs)
+        for i in range(self.num_blks):
+            with tf.variable_scope("enc_block_num%d"%i):
+                # out = self.pos_enc(inputs)
+                # out = self.convolve(out)
                 out = self.convolve(out)
                 out = self.self_att(out)
                 out = self.feed_forward(out)

@@ -77,39 +77,31 @@ experiment.log_multiple_params(hyper_params)
 opt = tf.train.AdamOptimizer(learning_rate=config['hp'].getfloat('LR'),
                              beta1=0.8, beta2=0.999, epsilon=1e-07,
                              use_locking=False)
-tower_grads = []
-tower_losses = []
-with tf.variable_scope('gpu', reuse=tf.AUTO_REUSE):
-    # load the model
-    model = QANet(word_emb, char_emb)
+# load the model
 
-    for i in range(num_gpus):
-        with tf.device('/gpu:%d' % i):
-            with tf.name_scope('gpu_%d' % i) as scope:
-                # c, q, ch, qh, y1, y2, qa_id = train_it.get_next()
-                c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
-                                                      lambda: train_it.get_next(),
-                                                      lambda: val_it.get_next())
+with tf.device('/gpu:0'):
+    with tf.variable_scope('model', reuse=tf.AUTO_REUSE) as scope:
+        c, q, ch, qh, y1, y2, qa_id = tf.cond(is_training,
+                                              lambda: train_it.get_next(),
+                                              lambda: val_it.get_next())
 
-                # forward inference
-                p1_logits, p2_logits = model.forward(c, q, ch, qh)
-                p1 = tf.argmax(p1_logits, axis=1)
-                p2 = tf.argmax(p2_logits, axis=1)
+        # forward inference
+        model = QANet(word_emb, char_emb)
+        p1_logits, p2_logits = model.forward(c, q, ch, qh)
+        p1 = tf.argmax(p1_logits, axis=1)
+        p2 = tf.argmax(p2_logits, axis=1)
 
-                summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
+        summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
-                # get the loss
-                loss = model.get_loss(p1_logits, p2_logits, y1, y2)
-                tower_losses.append(loss)
+        # get the loss
+        train_loss = model.get_loss(p1_logits, p2_logits, y1, y2)
 
-                ## reuse variables for next call
-                tf.get_variable_scope().reuse_variables()
+        ## reuse variables for next call
+        # tf.get_variable_scope().reuse_variables()
+        grads = opt.compute_gradients(train_loss)
 
-                grads = opt.compute_gradients(loss)
-                tower_grads.append(grads)
-
-avg_loss = tf.reduce_mean(tower_losses)
-grads = average_gradients(tower_grads)
+# avg_loss = tf.reduce_mean(tower_losses)
+# grads = average_gradients(tower_grads)
 
 for grad, var in grads:
     if grad is not None:
@@ -153,14 +145,14 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                 # run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 # run_metadata = tf.RunMetadata()
 
-                _, loss = sess.run([train_op, avg_loss], feed_dict={is_training: True})
+                _, loss = sess.run([train_op, train_loss], feed_dict={is_training: True})
                 experiment.log_metric("loss", loss, step=it)
                 # summary_writer.add_run_metadata(run_metadata, 'step001')
-                tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
                 it += 1
 
                 if it % DISPLAY_ITER:
-                    tf.logging.info('step %d, loss = %f', it, loss)
+                    tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
+                    # tf.logging.info('step %d, loss = %f', it, loss)
                     loss_summ = tf.Summary(value=[
                         tf.Summary.Value(tag="train_loss", simple_value=loss)
                     ])
@@ -181,7 +173,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                     step = 0
                     while step < 157:
                         try:
-                            _id, vloss, yp1, yp2 = sess.run([qa_id, avg_loss, p1, p2], feed_dict={is_training: False})
+                            _id, vloss, yp1, yp2 = sess.run([qa_id, train_loss, p1, p2], feed_dict={is_training: False})
 
                             tf.logging.info('step %d, val_loss = %f', step, vloss)
                             answer_dict_, _ = convert_tokens(
