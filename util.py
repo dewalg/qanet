@@ -73,6 +73,7 @@ def convert_tokens(eval_file, qa_id, pp1, pp2):
         uuid = eval_file[str(qid)]["uuid"]
 
         if p1 >= len(spans) or p2 >= len(spans):
+            print('P1/P2 WENT BEYOND LEN OF SPAN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
             p1 = 0
             p2 = 0
 

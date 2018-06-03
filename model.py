@@ -40,31 +40,6 @@ class QANet:
         self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
         self.dropout = 0.1
 
-        # encoder blocks
-        # self.emb_encoder = EncoderBlk(self.emb_num_blocks,
-        #                               self.emb_num_conv_layers,
-        #                               self.emb_kernel_size,
-        #                               self.enc_dim,
-        #                               self.is_training)
-
-        # self.model_blk_1 = EncoderBlk(self.model_num_blocks,
-        #                               self.model_num_conv_layers,
-        #                               self.emb_kernel_size,
-        #                               self.enc_dim,
-        #                               self.is_training)
-        #
-        # self.model_blk_2 = EncoderBlk(self.model_num_blocks,
-        #                               self.model_num_conv_layers,
-        #                               self.emb_kernel_size,
-        #                               self.enc_dim,
-        #                               self.is_training)
-        #
-        # self.model_blk_3 = EncoderBlk(self.model_num_blocks,
-        #                               self.model_num_conv_layers,
-        #                               self.emb_kernel_size,
-        #                               self.enc_dim,
-        #                               self.is_training)
-
     def embed(self, word, char, is_context=False):
         """
         returns the embedding of the word AND char by
@@ -187,7 +162,8 @@ class QANet:
 
         logits = tf.nn.softmax(inp)
         p = tf.argmax(logits, axis=1)
-        return logits, p
+        # return logits, p
+        return inp, p
 
     def optimized_trilinear_for_attention(self, c, q):
         args = [c, q]
