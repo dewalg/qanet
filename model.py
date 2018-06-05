@@ -243,7 +243,8 @@ class QANet:
                                      self.emb_num_conv_layers,
                                      self.emb_kernel_size,
                                      self.enc_dim,
-                                     self.is_training)
+                                     self.is_training,
+                                     regularizer=self.l2_regularizer)
 
             c = emb_encoder.forward(c_emb)
             q = emb_encoder.forward(q_emb)
@@ -261,7 +262,8 @@ class QANet:
                                    self.model_num_conv_layers,
                                    self.emb_kernel_size,
                                    self.enc_dim,
-                                   self.is_training)
+                                   self.is_training,
+                                   regularizer=self.l2_regularizer)
             model_0 = model_blk.forward(att)
             model_1 = model_blk.forward(model_0)
             model_2 = model_blk.forward(model_1)
@@ -302,11 +304,16 @@ class QANet:
             logits=p_logits_1, labels=actual_1)
         losses2 = tf.nn.softmax_cross_entropy_with_logits(
             logits=p_logits_2, labels=actual_2)
-        return tf.reduce_mean(losses + losses2)
+        loss = tf.reduce_mean(losses + losses2)
+
+        variables = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+        l2_loss = tf.contrib.layers.apply_regularization(self.l2_regularizer, variables)
+        loss += l2_loss
+        return loss
 
 
 class EncoderBlk:
-    def __init__(self, num_blks, num_conv_layers, kernel_size=7, num_filters=128, is_training=True):
+    def __init__(self, num_blks, num_conv_layers, kernel_size=7, num_filters=128, is_training=True, regularizer=None):
         self.config = ConfigParser(interpolation=ExtendedInterpolation())
         self.config.read('config.ini')
 
@@ -320,7 +327,8 @@ class EncoderBlk:
         self.N = self.config['dim'].getint('batch_size')
         self.dropout_keep_prob = self.config['hp'].getfloat('DROPOUT_KEEP_PROB')
 
-        self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
+        # self.l2_regularizer = tf.contrib.layers.l2_regularizer(scale=3e-7)
+        self.l2_regularizer = regularizer
 
         # self attention
 
