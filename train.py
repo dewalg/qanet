@@ -1,6 +1,7 @@
 import os
 import json
 from util import *
+from extra import *
 from model import *
 from comet_ml import Experiment
 
@@ -88,8 +89,15 @@ with tf.device('/gpu:0'):
         # forward inference
         model = QANet(word_emb, char_emb)
         p1_logits, p2_logits = model.forward(c, q, ch, qh)
-        p1 = tf.argmax(p1_logits, axis=1)
-        p2 = tf.argmax(p2_logits, axis=1)
+        c_mask = tf.cast(c, tf.bool)
+        p1_logits = mask_logits(p1_logits, c_mask)
+        p2_logits = mask_logits(p2_logits, c_mask)
+
+        outer = tf.matmul(tf.expand_dims(tf.nn.softmax(p1_logits), axis=2),
+                          tf.expand_dims(tf.nn.softmax(p2_logits), axis=1))
+        outer = tf.matrix_band_part(outer, 0, config['dim'].getint("ans_limit"))
+        p1 = tf.argmax(tf.reduce_max(outer, axis=2), axis=1)
+        p2 = tf.argmax(tf.reduce_max(outer, axis=1), axis=1)
 
         summaries = tf.get_collection(tf.GraphKeys.SUMMARIES, scope)
 
@@ -145,7 +153,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                 # run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                 # run_metadata = tf.RunMetadata()
 
-                _, loss = sess.run([train_op, train_loss], feed_dict={is_training: True})
+                _, loss, p_1 = sess.run([train_op, train_loss, p1], feed_dict={is_training: True})
                 experiment.log_metric("loss", loss, step=it)
                 # summary_writer.add_run_metadata(run_metadata, 'step001')
                 it += 1
