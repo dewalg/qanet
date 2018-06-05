@@ -158,7 +158,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                 # summary_writer.add_run_metadata(run_metadata, 'step001')
                 it += 1
 
-                if it % DISPLAY_ITER:
+                if it % DISPLAY_ITER == 0:
                     tf.logging.info('epoch %d, step %d, loss = %f', epoch, it, loss)
                     # tf.logging.info('step %d, loss = %f', it, loss)
                     loss_summ = tf.Summary(value=[
