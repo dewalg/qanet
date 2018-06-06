@@ -3,7 +3,6 @@ import json
 from util import *
 from extra import *
 from model import *
-from comet_ml import Experiment
 
 config = ConfigParser(interpolation=ExtendedInterpolation())
 config.read('config.ini')
@@ -69,9 +68,7 @@ val_it = val_data.make_one_shot_iterator()
 val_init_op = val_it.make_initializer(val_data)
 is_training = tf.placeholder(tf.bool)
 
-experiment = Experiment(api_key="CwfC44eKOZx1oFdva2nDp3P8i", project_name="nlp")
 hyper_params = {"epochs": MAX_EPOCH, "learning_rate": config['hp'].getfloat('LR'), "batch_size": config['dim'].getint('batch_size')}
-experiment.log_multiple_params(hyper_params)
 
 #build the optimizer
 # lr = tf.minimum(config.learning_rate, 0.001 / tf.log(999.) * tf.log(tf.cast(global_step, tf.float32) + 1))
@@ -153,7 +150,6 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
 
     it = 0
     for epoch in range(MAX_EPOCH):
-        experiment.log_current_epoch(epoch)
         sess.run([train_init_op, val_init_op])
         while True:
             try:
@@ -161,7 +157,6 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                 # run_metadata = tf.RunMetadata()
 
                 _, loss, p_1 = sess.run([train_op, avg_loss], feed_dict={is_training: True})
-                experiment.log_metric("loss", loss, step=it)
                 # summary_writer.add_run_metadata(run_metadata, 'step001')
                 it += 1
 
@@ -213,11 +208,6 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
                     tf.logging.info('val f1: %f', metrics['f1'])
                     tf.logging.info('val em: %f', metrics['exact_match'])
 
-                    with experiment.validate():
-                        experiment.log_metric("val loss", metrics['loss'], step=it)
-                        experiment.log_metric("val f1", metrics['f1'], step=it)
-                        experiment.log_metric("val em", metrics['exact_match'], step=it)
-
                     # add val metrics to summary
                     to_write = [loss_sum, f1_sum, em_sum]
                     for metric in to_write:
@@ -226,5 +216,4 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
             except tf.errors.OutOfRangeError as e:
                 break
 
-        experiment.log_epoch_end(epoch, it)
     summary_writer.close()
